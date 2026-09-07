@@ -50,8 +50,8 @@ static bool esperando_get;
 
 /* ===================== serdev: recepcion ===================== */
 
-static int esp32_receive_buf(struct serdev_device *serdev,
-                              const unsigned char *data, size_t count)
+static size_t esp32_receive_buf(struct serdev_device *serdev,
+                                 const unsigned char *data, size_t count)
 {
     size_t i;
 

@@ -13,7 +13,8 @@ con `read`/`write`/`ioctl`.
 |-------------------------------|-----------------------------------------------------------------------|
 | `esp32_link.c`               | Driver: bus `serdev`, `kfifo` (productor-consumidor), `ioctl` con `completion` |
 | `esp32_link.h`               | Comandos `ioctl` compartidos con `../p2_esp32_ctl/`                |
-| `esp32-link-overlay.dts`     | Overlay propio: `pinctrl` de GPIO4/GPIO5 + habilita UART3 + nodo hijo ESP32-S3 |
+| `esp32-link-pi4-overlay.dts` | Overlay para Pi 4 (BCM2711): `pinctrl` propio de GPIO4/GPIO5 + habilita UART3 + nodo hijo ESP32-S3 |
+| `esp32-link-pi5-overlay.dts` | Overlay para Pi 5 (BCM2712/RP1): habilita UART3 + nodo hijo ESP32-S3, reusa el `pinctrl` `uart3_pins` del árbol base |
 | `Makefile`                   | Invoca Kbuild contra las cabeceras del kernel                      |
 
 ## Requisitos previos
@@ -28,22 +29,37 @@ con `read`/`write`/`ioctl`.
 Se eligió **UART3** (`GPIO4`/`GPIO5`) en vez de UART2 (`GPIO0`/`GPIO1`, reservado para la
 detección de HATs con EEPROM) o el UART primario (consola serie del sistema).
 
-### El overlay: `pinctrl` propio, sin depender del oficial
+### El overlay: dos variantes, Pi 4 y Pi 5
 
-Raspberry Pi distribuye un overlay oficial (`dtoverlay uart3`) que habilita este UART, pero
-solo hace falta que ponga `status = "okay"` porque el mapeo de pines ya está en el árbol base.
-Acá se prefiere no depender de esa asignación implícita: `esp32-link-overlay.dts` declara su
-propio grupo de `pinctrl` (`GPIO4`/`GPIO5` en función alternativa ALT4 = `TXD3`/`RXD3`, según
-la tabla 94 del datasheet del BCM2711) y lo conecta a `uart3` él mismo — un solo overlay,
-propio, sin aplicar nada de Raspberry Pi por separado.
+**La Pi 4 (BCM2711) y la Pi 5 (BCM2712) no comparten el mismo mecanismo de `pinctrl`.** En la
+Pi 5 el GPIO/UART lo maneja un chip aparte, el **RP1** (conectado por PCIe), con su propio
+controlador de pines -- la sintaxis `brcm,pins`/`brcm,function` de la Pi 4 no aplica ahí.
+
+- **Pi 4** -- `esp32-link-pi4-overlay.dts` declara su propio grupo de `pinctrl`
+  (`GPIO4`/`GPIO5` en función alternativa ALT4 = `TXD3`/`RXD3`, verificado contra la tabla 94
+  del datasheet del BCM2711) y lo conecta a `uart3` él mismo, sin depender del overlay oficial
+  de Raspberry Pi (que solo hace `status = "okay"`, confiando en que el mapeo de pines ya está
+  en el árbol base).
+- **Pi 5** -- `esp32-link-pi5-overlay.dts` referencia el grupo `uart3_pins` que ya viene
+  correcto en el árbol base de la Pi 5 (mismo patrón que el overlay oficial
+  `uart3-pi5-overlay.dts` de Raspberry Pi) -- no armamos el grupo a mano en este caso porque
+  todavía no está verificada la codificación numérica del pinmux de RP1.
 
 ```bash
-dtc -@ -I dts -O dtb -o esp32-link.dtbo esp32-link-overlay.dts
+# Pi 4:
+dtc -@ -I dts -O dtb -o esp32-link.dtbo esp32-link-pi4-overlay.dts
+# Pi 5:
+dtc -@ -I dts -O dtb -o esp32-link.dtbo esp32-link-pi5-overlay.dts
+
 sudo dtoverlay -d . esp32-link
 
 # Verificar que el nodo quedo en el arbol en vivo
 ls /sys/firmware/devicetree/base/soc*/serial*/esp32-link/ 2>/dev/null || \
     find /sys/firmware/devicetree/base -name esp32-link
+
+# Verificar que el pin haya quedado en la funcion correcta (Pi 4: espera ALT4 en GPIO4/GPIO5)
+raspi-gpio get 4
+raspi-gpio get 5
 ```
 
 ## El protocolo
