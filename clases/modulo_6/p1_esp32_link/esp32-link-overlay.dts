@@ -1,0 +1,17 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2711";
+
+	fragment@0 {
+		target = <&uart3>;
+		__overlay__ {
+			esp32_link: esp32-link {
+				compatible = "td3,esp32-link";
+				current-speed = <115200>;
+				status = "okay";
+			};
+		};
+	};
+};
