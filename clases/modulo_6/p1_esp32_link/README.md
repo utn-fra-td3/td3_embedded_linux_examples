@@ -15,19 +15,29 @@ con `read`/`write`/`ioctl`.
 | `esp32_link.h`               | Comandos `ioctl` compartidos con `../p2_esp32_ctl/`                |
 | `esp32-link-pi4-overlay.dts` | Overlay para Pi 4 (BCM2711): `pinctrl` propio de GPIO4/GPIO5 + habilita UART3 + nodo hijo ESP32-S3 |
 | `esp32-link-pi5-overlay.dts` | Overlay para Pi 5 (BCM2712/RP1): habilita UART3 + nodo hijo ESP32-S3, reusa el `pinctrl` `uart3_pins` del árbol base |
+| `test-uart3-pi4-overlay.dts` | Overlay de diagnóstico (Pi 4): habilita UART3 sin nodo hijo, para probar la tty pelada sin el driver |
+| `test-uart3-pi5-overlay.dts` | Overlay de diagnóstico (Pi 5): ídem, para RP1 |
 | `Makefile`                   | Invoca Kbuild contra las cabeceras del kernel                      |
 
 ## Requisitos previos
 
 ### Conexionado
 
-- Pi `GPIO4` (TXD3, pin físico 7) → RX del ESP32-S3.
-- Pi `GPIO5` (RXD3, pin físico 29) ← TX del ESP32-S3.
-- GND común entre las dos placas.
+**Pi 4 y Pi 5 usan pines físicos distintos** para UART3 (verificado contra hardware real, no
+solo por documentación):
+
+- **Pi 4** -- `GPIO4` (TXD3, pin físico 7) → RX del ESP32-S3; `GPIO5` (RXD3, pin físico 29) ←
+  TX del ESP32-S3.
+- **Pi 5** -- `GPIO8` (TXD3, pin físico 24) → RX del ESP32-S3; `GPIO9` (RXD3, pin físico 21) ←
+  TX del ESP32-S3. Confirmado leyendo el árbol de dispositivos en vivo
+  (`uart3_pins = ".../rp1_uart3_8_9"`, con `pin_txd { pins = "gpio8"; }` y
+  `pin_rxd { pins = "gpio9"; }`).
+- GND común entre las dos placas (¡esto también hay que probarlo con multímetro si algo no
+  anda, no alcanza con "parece estar conectado"!).
 - Ambas trabajan a 3.3V: conexión directa, sin traductor de niveles.
 
-Se eligió **UART3** (`GPIO4`/`GPIO5`) en vez de UART2 (`GPIO0`/`GPIO1`, reservado para la
-detección de HATs con EEPROM) o el UART primario (consola serie del sistema).
+Se eligió **UART3** en vez de UART2 (`GPIO0`/`GPIO1` en Pi4, reservado para la detección de
+HATs con EEPROM) o el UART primario (consola serie del sistema).
 
 ### El overlay: dos variantes, Pi 4 y Pi 5
 
@@ -60,6 +70,9 @@ ls /sys/firmware/devicetree/base/soc*/serial*/esp32-link/ 2>/dev/null || \
 # Verificar que el pin haya quedado en la funcion correcta (Pi 4: espera ALT4 en GPIO4/GPIO5)
 raspi-gpio get 4
 raspi-gpio get 5
+
+# En Pi 5, si no tenes raspi-gpio, se puede volcar el arbol en vivo y buscar el grupo:
+sudo dtc -I fs -O dts /sys/firmware/devicetree/base 2>/dev/null | grep -A15 'rp1_uart3'
 ```
 
 ## El protocolo
@@ -82,8 +95,8 @@ Como el protocolo es texto plano sobre UART, se puede probar el driver completo 
 cuenta que la PC es el ESP32-S3, contestando a mano:
 
 1. Conectar un adaptador USB-serie **de 3.3V** (no de 5V) a la PC.
-2. Cablear cruzado contra los mismos pines de la Pi: TX del adaptador → `GPIO5` (RX de la
-   Pi), RX del adaptador ← `GPIO4` (TX de la Pi), GND común.
+2. Cablear cruzado contra los mismos pines de la Pi (ver "Conexionado" arriba, distintos en
+   Pi 4 y Pi 5): TX del adaptador → RX de la Pi, RX del adaptador ← TX de la Pi, GND común.
 3. Abrir una terminal serie en la PC, por ejemplo:
    ```bash
    picocom -b 115200 /dev/ttyUSB0
@@ -124,7 +137,36 @@ dmesg | tail -10
 sudo rmmod esp32_link
 ```
 
-## Nota
+## Troubleshooting -- problemas reales encontrados probando contra hardware
+
+Esta práctica ya se debuggeó de punta a punta contra una Pi 5 real con un adaptador USB-serie
+haciendo de ESP32-S3. Tres problemas reales aparecieron, en este orden -- documentados acá para
+no repetir la sesión de debug entera:
+
+1. **`/dev/esp32link` puede terminar siendo un archivo común, no el dispositivo.** Si en algún
+   momento se le escribió con `tee`/`echo`/redirección de la shell mientras el módulo **no**
+   estaba cargado, la shell simplemente crea un archivo de texto normal con ese nombre --
+   `udev` no lo pisa después al crear el nodo real. Se nota con `ls -l /dev/esp32link`: el nodo
+   real arranca con `c` y muestra major/minor (`crw------- ... 509, 0 ...`); un archivo común
+   arranca con `-` y muestra un tamaño en bytes. Si pasa: `sudo rm -f /dev/esp32link` y volver
+   a cargar el módulo.
+
+2. **`serdev_device_write()` exige un `write_wakeup` registrado si se lo llama con un
+   `timeout` distinto de cero** -- sin él, devuelve `-EINVAL` siempre, sin transmitir un solo
+   byte, sin que el resto del driver tenga nada malo. Ya está corregido en `esp32_link.c`
+   (`esp32_write_wakeup`, un callback vacío, alcanza con que exista).
+
+3. **Nunca ignorar el valor de retorno de `serdev_device_write()`** -- puede devolver menos
+   bytes de los pedidos (o `0`) sin que sea un error negativo. Ya está corregido: `esp32_write`
+   y el `ioctl` ahora revisan el resultado y lo propagan.
+
+Si `/dev/esp32link` es un nodo de carácter real, el módulo tiene los tres fixes de arriba, y
+sigue sin verse nada del otro lado: revisar primero el UART pelado con
+`test-uart3-piN-overlay.dts` (sin nuestro driver de por medio) antes de sospechar del código --
+en la sesión real, el `pinctrl`/cableado terminaron estando bien y el bug estaba en el driver,
+pero podría ser al revés.
+
+## Otra nota
 
 Si el driver `ledbtn` de los Módulos 4-5 sigue cargado, `class_create("td3")` va a fallar acá
 porque ese nombre de clase ya está tomado en `sysfs` -- hace falta `sudo rmmod ledbtn` antes de
