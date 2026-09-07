@@ -13,7 +13,7 @@ con `read`/`write`/`ioctl`.
 |-------------------------------|-----------------------------------------------------------------------|
 | `esp32_link.c`               | Driver: bus `serdev`, `kfifo` (productor-consumidor), `ioctl` con `completion` |
 | `esp32_link.h`               | Comandos `ioctl` compartidos con `../p2_esp32_ctl/`                |
-| `esp32-link-overlay.dts`     | Overlay: describe al ESP32-S3 como nodo hijo del UART              |
+| `esp32-link-overlay.dts`     | Overlay propio: `pinctrl` de GPIO4/GPIO5 + habilita UART3 + nodo hijo ESP32-S3 |
 | `Makefile`                   | Invoca Kbuild contra las cabeceras del kernel                      |
 
 ## Requisitos previos
@@ -28,13 +28,16 @@ con `read`/`write`/`ioctl`.
 Se eligió **UART3** (`GPIO4`/`GPIO5`) en vez de UART2 (`GPIO0`/`GPIO1`, reservado para la
 detección de HATs con EEPROM) o el UART primario (consola serie del sistema).
 
-### Habilitar el UART y aplicar el overlay
+### El overlay: `pinctrl` propio, sin depender del oficial
+
+Raspberry Pi distribuye un overlay oficial (`dtoverlay uart3`) que habilita este UART, pero
+solo hace falta que ponga `status = "okay"` porque el mapeo de pines ya está en el árbol base.
+Acá se prefiere no depender de esa asignación implícita: `esp32-link-overlay.dts` declara su
+propio grupo de `pinctrl` (`GPIO4`/`GPIO5` en función alternativa ALT4 = `TXD3`/`RXD3`, según
+la tabla 94 del datasheet del BCM2711) y lo conecta a `uart3` él mismo — un solo overlay,
+propio, sin aplicar nada de Raspberry Pi por separado.
 
 ```bash
-# Habilitar el UART3 (overlay oficial de la Raspberry Pi Foundation)
-sudo dtoverlay uart3
-
-# Compilar y aplicar nuestro overlay (agrega el nodo hijo esp32-link)
 dtc -@ -I dts -O dtb -o esp32-link.dtbo esp32-link-overlay.dts
 sudo dtoverlay -d . esp32-link
 
