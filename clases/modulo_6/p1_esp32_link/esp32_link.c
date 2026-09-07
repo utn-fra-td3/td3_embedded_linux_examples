@@ -117,6 +117,7 @@ static ssize_t esp32_write(struct file *file, const char __user *buf,
 {
     char   local[MAX_LINE];
     size_t n = len;
+    int    ret;
 
     if (n >= sizeof(local))
         n = sizeof(local) - 1; /* nunca copiar mas de lo que entra en local[] */
@@ -132,7 +133,17 @@ static ssize_t esp32_write(struct file *file, const char __user *buf,
         local[n] = '\0';
     }
 
-    serdev_device_write(esp32_serdev, local, n, msecs_to_jiffies(100));
+    ret = serdev_device_write(esp32_serdev, local, n, msecs_to_jiffies(1000));
+    printk(KERN_INFO "esp32_link: write() pidio %zu bytes, serdev_device_write devolvio %d\n",
+           n, ret);
+    if (ret < 0) {
+        printk(KERN_ERR "esp32_link: serdev_device_write() fallo en write() (%d)\n", ret);
+        return ret;
+    }
+    if (ret != n) {
+        printk(KERN_WARNING "esp32_link: write parcial, se mandaron %d de %zu bytes\n",
+               ret, n);
+    }
 
     return len; /* se consumio todo el buffer original */
 }
