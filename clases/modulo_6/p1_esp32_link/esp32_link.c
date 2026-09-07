@@ -76,8 +76,17 @@ static size_t esp32_receive_buf(struct serdev_device *serdev,
     return count; /* consumimos todo lo que nos dieron */
 }
 
+/* serdev_device_write() exige un write_wakeup registrado para aceptar un
+ * timeout != 0 -- lo usa para saber cuando se libero espacio en el buffer
+ * de transmision mientras espera. Sin el, devuelve -EINVAL de entrada. No
+ * necesitamos hacer nada especial acá, alcanza con que exista. */
+static void esp32_write_wakeup(struct serdev_device *serdev)
+{
+}
+
 static const struct serdev_device_ops esp32_serdev_ops = {
-    .receive_buf = esp32_receive_buf,
+    .receive_buf  = esp32_receive_buf,
+    .write_wakeup = esp32_write_wakeup,
 };
 
 /* ===================== file_operations ===================== */
